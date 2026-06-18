@@ -1,0 +1,12 @@
+/var/log/odoo/*.log {
+    daily
+    missingok
+    rotate 30
+    compress
+    notifempty
+    create 644 odoo odoo
+    postrotate
+        # Restart Odoo service if needed
+        /bin/kill -USR1 $(cat /var/run/odoo.pid 2>/dev/null) 2>/dev/null || true
+    endscript
+}

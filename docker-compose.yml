@@ -1,0 +1,182 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: erick_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=erick
+      - POSTGRES_USER=odoo
+      - POSTGRES_PASSWORD=odoo
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgresql:/var/lib/postgresql/data/pgdata
+      - ./backups:/backups
+    ports:
+      - "6005:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo -d erick"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - erick_network
+
+  odoo:
+    image: odoo:18.0
+    container_name: erick_odoo
+    restart: unless-stopped
+    user: root
+    depends_on:
+      - postgres
+      
+    ports:
+      - "8643:8069"
+      - "9643:8072"
+    volumes:
+      - ./data/odoo:/var/lib/odoo
+      - ./config/odoo.conf:/etc/odoo/odoo.conf
+      - ./addons/custom:/mnt/custom-addons
+      - ./addons/extra:/mnt/extra-addons
+      - ./config/requirements.txt:/tmp/requirements.txt
+      # Optional system packages to install at startup (fonts, etc.)
+      - ./config/system-packages.txt:/tmp/system-packages.txt:ro
+      # Optional fontconfig alias file (to silence Courier .pfb warnings)
+      - ./config/fontconfig-local.conf:/etc/fonts/local.conf:ro
+      - ./logs:/var/log/odoo
+      - ./entrypoint.sh:/entrypoint.sh
+    environment:
+      - HOST=postgres
+      - PORT=5432
+      - USER=odoo
+      - PASSWORD=odoo
+      - POSTGRES_DB=erick
+      - ADMIN_PASSWD=admin
+      - INIT_DB=1
+      - WORKERS=0
+      - MAX_CRON_THREADS=2
+      - LIMIT_MEMORY_SOFT=2147483648
+      - LIMIT_MEMORY_HARD=2684354560
+      - LIMIT_TIME_CPU=60
+      - LIMIT_TIME_REAL=120
+      
+      
+    entrypoint: ["/entrypoint.sh"]
+    command: ["odoo", "-c", "/etc/odoo/odoo.conf"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8069/web/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - erick_network
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.erick.rule=Host(`erick.localhost`)"
+      - "traefik.http.routers.erick.entrypoints=web"
+      - "traefik.http.services.erick.loadbalancer.server.port=8069"
+
+  
+
+  
+
+  
+
+  
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: erick_pgadmin
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@erick.local
+      - PGADMIN_DEFAULT_PASSWORD=adminpass
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+      - PGADMIN_CONFIG_LOGIN_BANNER="Odoo.sh Local PgAdmin for erick"
+      - PGADMIN_SERVER_JSON_FILE=/pgadmin4/servers.json
+      - PGADMIN_CONFIG_CHECK_EMAIL_DELIVERABILITY=False
+      - PGADMIN_CONFIG_GLOBALLY_DELIVERABLE=False
+      - PGADMIN_CONFIG_ALLOW_SPECIAL_EMAIL_DOMAINS=['local','localhost','localdomain']
+    ports:
+      - "5623:80"
+    volumes:
+      - ./data/pgadmin:/var/lib/pgadmin
+      - ./config/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      - postgres
+    networks:
+      - erick_network
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.erick-pgadmin.rule=Host(`pgadmin.erick.localhost`)"
+      - "traefik.http.routers.erick-pgadmin.entrypoints=web"
+      - "traefik.http.services.erick-pgadmin.loadbalancer.server.port=80"
+  
+
+  
+  jupyter:
+    image: jupyter/datascience-notebook:python-3.11
+    container_name: erick_jupyter
+    restart: unless-stopped
+    user: root
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - GRANT_SUDO=yes
+      - CHOWN_HOME=no
+      - NB_UID=1000
+      - NB_GID=100
+      - RESTARTABLE=yes
+      # Odoo-specific environment
+      - PYTHONPATH=/opt/odoo:/opt/odoo/addons:/home/jovyan/addons
+      - ODOO_RC=/home/jovyan/config/odoo.conf
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=odoo
+      - DB_PASSWORD=odoo
+      - DB_NAME=erick
+    ports:
+      - "9461:8888"
+    volumes:
+      - ./addons:/home/jovyan/addons:rw
+      - ./notebooks:/home/jovyan/notebooks:rw
+      - ./config:/home/jovyan/config:ro
+      - ./data/odoo:/home/jovyan/odoo_data:rw
+      - ./logs:/home/jovyan/logs:rw
+      # Install Odoo dependencies in Jupyter
+      - ./config/jupyter_requirements.txt:/tmp/requirements.txt:ro
+    command: >
+      bash -c "
+      echo 'Starting Jupyter Lab without token...'
+      pip install --no-cache-dir -r /tmp/requirements.txt --progress-bar off || true;
+      start-notebook.sh --ServerApp.token='' --ServerApp.password='' --ServerApp.disable_check_xsrf=True --ServerApp.allow_remote_access=True --ServerApp.ip='0.0.0.0' --ServerApp.port=8888 --ServerApp.root_dir='/home/jovyan/addons'
+      "
+    depends_on:
+      - postgres
+      - odoo
+    networks:
+      - erick_network
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.erick-jupyter.rule=Host(`jupyter.erick.localhost`)"
+      - "traefik.http.routers.erick-jupyter.entrypoints=web"
+      - "traefik.http.services.erick-jupyter.loadbalancer.server.port=8888"
+  
+
+volumes:
+  erick_odoo_data:
+    driver: local
+  erick_postgres_data:
+    driver: local
+  
+  
+
+networks:
+  erick_network:
+    driver: bridge
+    name: erick_network
+  traefik:
+    external: true
+    name: traefik
